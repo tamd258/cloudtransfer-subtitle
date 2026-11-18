@@ -1,0 +1,63 @@
+name: tmp-fetch-srt
+
+# 临时: 把源目录指定 srt 打包成 artifact(用于本地质量对比), 用完即删
+on:
+  workflow_dispatch:
+    inputs:
+      include:
+        description: "文件名过滤(glob)"
+        required: false
+        default: "*.srt"
+      sub_dir:
+        description: "源目录(默认 out4)"
+        required: false
+        default: "out4"
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 装 rclone
+        run: |
+          curl -s https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/r.zip
+          unzip -q -o /tmp/r.zip -d /tmp
+          cp /tmp/rclone-*/rclone /usr/local/bin/
+
+      - name: 写 rclone 配置
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+
+      - name: 拉文件并改 ASCII 名
+        env:
+          INC: ${{ inputs.include }}
+          SUBDIR: ${{ inputs.sub_dir }}
+        run: |
+          mkdir -p out
+          rclone copy "gd6x:$SUBDIR" out --include "$INC" --fast-list
+          ls -la out | head -60
+          python3 - <<'PYEOF'
+          import os, re, shutil
+          mapping = []
+          for f in sorted(os.listdir('out')):
+              m = re.search(r'part(\d+)', f)
+              tag = m.group(1) if m else re.sub(r'\W+', '_', f)[:20]
+              dst = 'p%s.srt' % tag
+              shutil.move(os.path.join('out', f), os.path.join('out', dst))
+              mapping.append('%s <= %s' % (dst, f))
+          with open('out/_mapping.txt', 'w', encoding='utf-8') as fh:
+              fh.write('\n'.join(mapping))
+          print('\n'.join(mapping))
+          PYEOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: srt-fetch
+          path: out
+          retention-days: 1
