@@ -159,7 +159,9 @@ jobs:
 
       # 自接力: 本批干完立刻补满并行(不依赖 GitHub cron —— 实测 cron 会数小时不响)。
       - name: 自接力补满并行
-        if: always()
+        # !cancelled(): 被取消的 run 不许再自接力 —— 否则一取消就触发 relay 洪水
+        # (2026-11-18 实测: 取消 20 个批次 → 瞬间多出 ~50 个重复批次)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
