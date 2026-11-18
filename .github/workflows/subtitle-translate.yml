@@ -84,14 +84,28 @@ jobs:
             ffmpeg -version | head -1
             exit 0
           fi
-          echo "镜像里没有 ffmpeg, 拉静态包"
-          curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
-            -o /tmp/ff.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-          sudo mkdir -p /opt/ff
-          sudo tar -xJf /tmp/ff.tar.xz -C /opt/ff --strip-components=1
-          sudo ln -sf /opt/ff/ffmpeg /usr/local/bin/ffmpeg
-          sudo ln -sf /opt/ff/ffprobe /usr/local/bin/ffprobe
+          echo "镜像里没有 ffmpeg, 先试 BtbN 的 GitHub 静态构建"
+          ok=0
+          if curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
+               -o /tmp/ff.tar.xz \
+               https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+             && sudo mkdir -p /opt/ff \
+             && sudo tar -xJf /tmp/ff.tar.xz -C /opt/ff --strip-components=1; then
+            ff=$(sudo find /opt/ff -type f -name ffmpeg | head -1)
+            fp=$(sudo find /opt/ff -type f -name ffprobe | head -1)
+            if [ -n "$ff" ] && [ -n "$fp" ]; then
+              sudo ln -sf "$ff" /usr/local/bin/ffmpeg
+              sudo ln -sf "$fp" /usr/local/bin/ffprobe
+              ok=1
+            fi
+          fi
+          if [ "$ok" != "1" ]; then
+            echo "静态包也没成, 退回 apt"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
           ffmpeg -version | head -1
+          ffprobe -version | head -1
 
       - name: 装 rclone
         run: |
