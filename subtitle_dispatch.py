@@ -116,17 +116,23 @@ def main():
         return 0
 
     # 4) 补满并行
-    need = TARGET_PARALLEL - len(act)
+    # 待办能排出的批次数: si 越过它必然是空批次(进去就"本批目标组: 0", 白烧 1~2 分钟 runner)
+    slots = max(1, (todo + GROUPS_PER_RUN - 1) // GROUPS_PER_RUN)
+    base = min(len(act), slots)
+    need = min(TARGET_PARALLEL - len(act), slots - base)
     if need <= 0:
-        log("并发已满, 不补发")
+        log("并发已满 / 待办排满: 活跃=%d 目标并行=%d 待办=%d 组(可排 %d 批, 已排 %d 批), 不补发"
+            % (len(act), TARGET_PARALLEL, todo, slots, base))
         return 0
     bt = int(time.time())
     n_ok = 0
     first_err = ""
     first_code = None
-    base = len(act)                      # 排在已在跑的批次之后, 避免区间重叠
     for i in range(need):
         si = (base + i) * GROUPS_PER_RUN    # 0,3,6,9... 不重叠
+        if si >= todo:                      # 越过待办就没有组可做, 别派空批次
+            log("跳过 si=%d(待办只到 %d 组)" % (si, todo))
+            break
         inputs = {"apply": "true", "limit_groups": str(GROUPS_PER_RUN), "budget_min": "340",
                   "whisper_model": os.environ.get("WHISPER_MODEL", "large-v3"), "start_index": str(si),
                   "batch_tag": "translate_%d_%d" % (bt, i)}
