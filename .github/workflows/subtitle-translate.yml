@@ -179,6 +179,10 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # 不传的话 subtitle_dispatch.py 会用脚本默认值(20 并发/每批 3 组),
+          # 和仓库 Variables 脱节 —— 实测派出一堆越界空批次(si=39/57)。
+          TARGET_PARALLEL: ${{ vars.TARGET_PARALLEL || '8' }}
+          GROUPS_PER_RUN: ${{ vars.GROUPS_PER_RUN || '6' }}
         run: |
           sleep $((RANDOM % 25))
           python3 subtitle_dispatch.py
