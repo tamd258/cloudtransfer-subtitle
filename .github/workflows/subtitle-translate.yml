@@ -74,10 +74,23 @@ jobs:
       - name: 取仓库
         uses: actions/checkout@v4
 
-      - name: 装 ffmpeg
+      - name: 准备 ffmpeg
+        # 不走 apt: 20 个 job 同时 apt-get 会互相拖(实测同一步 16s ~ 861s),
+        # 而真正转写只要 90 秒 —— 槽位不能耗在装包上。
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          set -euo pipefail
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            echo "镜像自带 ffmpeg, 跳过安装"
+            ffmpeg -version | head -1
+            exit 0
+          fi
+          echo "镜像里没有 ffmpeg, 拉静态包"
+          curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
+            -o /tmp/ff.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          sudo mkdir -p /opt/ff
+          sudo tar -xJf /tmp/ff.tar.xz -C /opt/ff --strip-components=1
+          sudo ln -sf /opt/ff/ffmpeg /usr/local/bin/ffmpeg
+          sudo ln -sf /opt/ff/ffprobe /usr/local/bin/ffprobe
           ffmpeg -version | head -1
 
       - name: 装 rclone
