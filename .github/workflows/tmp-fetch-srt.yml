@@ -19,7 +19,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: 装 rclone
         run: |
@@ -32,28 +32,26 @@ jobs:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
         run: |
           mkdir -p ~/.config/rclone
-          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          printf '%s\\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
 
-      - name: 拉文件并改 ASCII 名
+      - name: 拉文件并改哈希名
         env:
           INC: ${{ inputs.include }}
           SUBDIR: ${{ inputs.sub_dir }}
         run: |
           mkdir -p out
           rclone copy "gd6x:$SUBDIR" out --include "$INC" --fast-list
-          ls -la out | head -60
+          echo "拉到 $(ls out | wc -l) 个文件"
           python3 - <<'PYEOF'
-          import os, re, shutil
+          import hashlib, os, shutil
           mapping = []
           for f in sorted(os.listdir('out')):
-              m = re.search(r'part(\d+)', f)
-              tag = m.group(1) if m else re.sub(r'\W+', '_', f)[:20]
-              dst = 'p%s.srt' % tag
-              shutil.move(os.path.join('out', f), os.path.join('out', dst))
-              mapping.append('%s <= %s' % (dst, f))
+              h = hashlib.sha1(f.encode('utf-8')).hexdigest()[:12]
+              shutil.move(os.path.join('out', f), os.path.join('out', h + '.srt'))
+              mapping.append('%s.srt <= %s' % (h, f))
           with open('out/_mapping.txt', 'w', encoding='utf-8') as fh:
-              fh.write('\n'.join(mapping))
-          print('\n'.join(mapping))
+              fh.write('\\n'.join(mapping))
+          print('映射 %d 条' % len(mapping))
           PYEOF
 
       - uses: actions/upload-artifact@v4
