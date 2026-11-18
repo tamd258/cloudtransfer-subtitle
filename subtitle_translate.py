@@ -914,7 +914,25 @@ def process_group(remote, path, base, parts, workdir, apply, probe_seconds=0, bu
             except Exception: pass
         return
     if not segs:
-        log("!! 无字幕段, 跳过")
+        # 整组都没语音(静音/纯音乐): 给每个分片写空 srt 占位。
+        # 不写占位的话「组内每片都有同名 srt」永远不成立 -> 这组每轮都被重新下载重传(死循环)。
+        log("!! 整组无字幕段 -> 写空 srt 占位(避免无限重跑)")
+        n_ph = 0
+        for nm in part_basenames(parts):
+            ph = os.path.join(gdir, os.path.basename(nm) + ".srt")
+            write_srt([(0.0, 1.0, "")], ph)
+            rc, out, err = run(["rclone", "copyto", ph,
+                                "%s:%s/%s.srt" % (remote, path, nm), "--retries", "3"])
+            if rc == 0:
+                n_ph += 1
+            else:
+                log("!! 上传占位失败 %s.srt: %s" % (nm, err[:200]))
+        log("上传空 srt 占位 -> %d/%d 份" % (n_ph, len(part_basenames(parts))))
+        for p in local_parts + [video]:
+            try:
+                os.remove(p)
+            except Exception:
+                pass
         return
     if TRANSLATE_ON:
         try:
@@ -945,8 +963,10 @@ def process_group(remote, path, base, parts, workdir, apply, probe_seconds=0, bu
     n_up = 0
     for name, ss in zip(names, per_part):
         if not ss:
-            log("  跳过(该片无字幕段): %s.srt" % name)
-            continue
+            # 该片没语音: 写空 srt 占位(一条空白字幕), 让这组能算"已完成",
+            # 否则它永远挂在待处理里被反复下载+转写(实测 40 组卡 3 小时)。
+            log("  该片无字幕段 -> 写空 srt 占位: %s.srt" % name)
+            ss = [(0.0, 1.0, "")]
         local_srt = os.path.join(gdir, os.path.basename(name) + ".srt")
         write_srt(ss, local_srt)
         rc, out, err = run(["rclone", "copyto", local_srt,
