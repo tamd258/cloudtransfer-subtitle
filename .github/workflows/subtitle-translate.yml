@@ -5,7 +5,7 @@ name: subtitle-translate
 #   → 按标点重切成字幕行(单条 <=8s / <=42字) → 每个视频文件旁写同名 .srt 上传
 #
 # 公开仓库: 日志全部脱敏(logmask), 真实盘名/目录名/番号/链接均不出现明文。
-# Secrets: RCLONE_CONF / PATHS_JSON / GH_TOKEN
+# Secrets: RCLONE_CONF / PATHS_JSON / GH_TOKEN / YDY_DAV_TOKEN / TG_TOKEN / TG_CHAT_ID
 # (不翻译: 不调用任何 LLM 网关, 不需要 SUBTITLE_API_* / TRANSLATE_*)
 
 on:
@@ -152,6 +152,8 @@ jobs:
 
       - name: 跑字幕流水线(只出日文 srt)
         env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           EVENT_NAME: ${{ github.event_name }}
           APPLY: ${{ inputs.apply || 'false' }}
           ONLY: ${{ inputs.only || '' }}
@@ -187,6 +189,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           # 不传的话 subtitle_dispatch.py 会用脚本默认值(20 并发/每批 3 组),
           # 和仓库 Variables 脱节 —— 实测派出一堆越界空批次(si=39/57)。
           TARGET_PARALLEL: ${{ vars.TARGET_PARALLEL || '8' }}
