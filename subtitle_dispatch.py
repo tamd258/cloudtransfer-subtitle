@@ -39,22 +39,14 @@ def log(m):
 
 
 def tg_alert(text):
-    """派发异常时给 Telegram 发告警。缺 token/网络异常都静默失败, 绝不影响主流程。
+    """发 Telegram 告警/报告(tgnotify 内部兜住缺配置与网络异常, 绝不影响主流程)。
 
     触发场景: GH_TOKEN 失效或权限不足 → dispatch API 回 404, 补发 0/N, 流程静默停摆。
     (2026-11-16 实战教训: 静默 404 让字幕流程停了一小时无人知, 故加此告警)
     """
-    token = os.environ.get("TG_TOKEN", "").strip()
-    chat = os.environ.get("TG_CHAT_ID", "").strip()
-    if not token or not chat:
-        return
     try:
-        body = urllib.parse.urlencode({"chat_id": chat, "text": text,
-                                       "disable_web_page_preview": "true"}).encode()
-        req = urllib.request.Request("https://api.telegram.org/bot%s/sendMessage" % token,
-                                     data=body, method="POST")
-        with urllib.request.urlopen(req, timeout=20) as x:
-            x.read()
+        import tgnotify
+        tgnotify.send(text)
     except Exception as e:
         log("!! TG 告警发送失败: %s" % str(e)[:120])
 
