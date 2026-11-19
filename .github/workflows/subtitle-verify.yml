@@ -52,6 +52,14 @@ jobs:
           mkdir -p ~/.config/rclone
           printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
 
+
+      - name: 追加 ydy2(139 个人云) WebDAV 远端
+        env:
+          YDY_DAV_TOKEN: ${{ secrets.YDY_DAV_TOKEN }}
+        run: |
+          printf '\n[ydy2]\ntype = webdav\nurl = https://abcd.tammader.de5.net/dav/ydy2\nvendor = other\nbearer_token = %s\n' "$YDY_DAV_TOKEN" >> ~/.config/rclone/rclone.conf
+          rclone listremotes
+
       - name: 校验 srt 质量(报告打进日志)
         run: |
           python3 verify_srt.py --tg \
