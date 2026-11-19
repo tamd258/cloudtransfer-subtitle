@@ -121,9 +121,14 @@ def fetch_srt(tmpdir):
 
 
 def tg_send(text):
-    """TG 已取消: 报告只打日志"""
+    """发 Telegram 报告(tgnotify; 缺 Secret / 网络异常都静默, 日志照旧留一份)"""
     log(text)
-    return True
+    try:
+        import tgnotify
+        return tgnotify.send(text) is not None
+    except Exception as e:
+        log("!! TG 发送失败: %s" % str(e)[:120])
+        return False
 
 
 def main():
@@ -206,12 +211,13 @@ def main():
                         f["sample_reason"] or ""))
 
         if a.tg:
-            msg = ("%s srt 质量校验\n文件 %d | 坏文件 %d (%.2f%%) | 条目 %d | 坏条目 %d (%.2f%%)\n整片未翻译 %d\n阈值 坏文件<=%.2f%% / 坏条目<=%.2f%%" % (
-                "✅" if ok else "❌", len(files), len(bad_files), bad_file_ratio * 100,
+            msg = ("%s srt 质量校验 · %s:%s\n文件 %d | 坏文件 %d (%.2f%%) | 条目 %d | 坏条目 %d (%.2f%%)\n整片未翻译 %d\n阈值 坏文件<=%.2f%% / 坏条目<=%.2f%%" % (
+                "✅" if ok else "❌", SRC_REMOTE, SRC_DIR,
+                len(files), len(bad_files), bad_file_ratio * 100,
                 tot_seg, tot_bad, bad_seg_ratio * 100, len(whole),
                 a.max_bad_file_ratio * 100, a.max_bad_seg_ratio * 100))
             if not ok:
-                msg += "\n\n烧录已被闸门拦住; 修好后再跑。"
+                msg += "\n\n质量闸门未通过: 先处理坏条目再继续。"
             tg_send(msg)
 
         if a.gate and not ok:
