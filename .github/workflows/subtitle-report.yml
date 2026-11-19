@@ -1,8 +1,8 @@
 name: subtitle-report
 
-# 字幕批量进度报告 -> run 日志(定时 + 手动, TG 已取消)
-#   统计源目录 srt 数 / 硬字幕数 / 待处理组数, 结合最近运行状态打日志。
-# Secrets: RCLONE_CONF / PATHS_JSON / GH_TOKEN
+# 字幕批量进度报告 -> run 日志 + Telegram(定时 + 手动)
+#   统计源目录(ydy2:五星)的组数/完成数/待办数/孤儿 srt, 结合最近运行状态。
+# Secrets: RCLONE_CONF / PATHS_JSON / GH_TOKEN / YDY_DAV_TOKEN / TG_TOKEN / TG_CHAT_ID
 
 on:
   schedule:
@@ -53,5 +53,8 @@ jobs:
           printf '\n[ydy2]\ntype = webdav\nurl = https://abcd.tammader.de5.net/dav/ydy2\nvendor = other\nbearer_token = %s\n' "$YDY_DAV_TOKEN" >> ~/.config/rclone/rclone.conf
           rclone listremotes
 
-      - name: 统计并打印报告
+      - name: 统计并打印报告(并发 Telegram)
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python3 subtitle_progress.py
