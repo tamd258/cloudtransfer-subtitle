@@ -2,7 +2,7 @@ name: subtitle-dispatch
 
 # 字幕批量自动调度器(每 10 分钟): 翻译阶段 —— 只出 srt, 不烧录。
 #   把 subtitle-translate 并行批次(默认 20 路, 每路 3 组)补满。
-#   - 待办=0 且近期无活动 -> 打日志"翻译全部完成"(TG 已取消)
+#   - 待办=0 且近期无活动 -> 打日志/进度报告里显示"全部完成"; 派发失败才发 TG 告警
 #   全流程只出日文 srt: 不翻译、不烧录。
 # 从此不依赖本机/会话在线 —— 全流程云上闭环。
 # Secrets: GH_TOKEN / RCLONE_CONF / PATHS_JSON / TG_TOKEN / TG_CHAT_ID
