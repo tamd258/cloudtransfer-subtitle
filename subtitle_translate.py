@@ -1082,6 +1082,21 @@ def main():
     shutil.rmtree(workdir, ignore_errors=True)
     log("完成: ok=%d fail=%d" % (ok, fail))
 
+    # 报告: 每批跑完发一条 Telegram(缺 TG_TOKEN/TG_CHAT_ID 时 tgnotify 静默跳过)
+    try:
+        import tgnotify
+        rest = ""
+        try:
+            import subtitle_progress as _sp
+            _st = _sp.collect()
+            rest = "\n总组 %d | 完成 %d | 待办 %d" % (_st["total_groups"], _st["done"], _st["pending"])
+        except Exception:
+            pass
+        tgnotify.send("%s 字幕批次完成 · %s:%s\n本批 ok=%d fail=%d%s" % (
+            "✅" if fail == 0 else "⚠️", SRC_REMOTE, SRC_DIR, ok, fail, rest))
+    except Exception as e:
+        log("!! TG 报告失败: %s" % str(e)[:120])
+
 
 if __name__ == "__main__":
     sys.exit(main())
