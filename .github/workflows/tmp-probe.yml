@@ -1,0 +1,67 @@
+name: tmp-probe
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: 装 rclone
+        run: |
+          curl -s https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/r.zip
+          unzip -q -o /tmp/r.zip -d /tmp
+          cp /tmp/rclone-*/rclone /usr/local/bin/
+          rclone version | head -1
+      - name: 写 rclone 配置
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+      - name: 探测
+        env:
+          PATHS_JSON: ${{ secrets.PATHS_JSON }}
+        run: |
+          python3 - <<'PY'
+          import os, json, hashlib, re, subprocess
+          pj = os.environ.get('PATHS_JSON', '')
+          print('PATHS_JSON raw_len=%d' % len(pj))
+          try:
+              d = json.loads(pj)
+          except Exception as e:
+              print('json parse fail: %s' % e); d = {}
+          print('keys=' + ','.join(sorted(d)))
+          for k in sorted(d):
+              v = d[k]
+              if isinstance(v, (dict, list)):
+                  print('%s type=%s n=%d' % (k, type(v).__name__, len(v))); continue
+              s = str(v)
+              print('%s len=%d md5=%s' % (k, len(s), hashlib.md5(s.encode()).hexdigest()[:12]))
+          conf = os.path.expanduser('~/.config/rclone/rclone.conf')
+          raw = open(conf, encoding='utf-8', errors='replace').read()
+          names = re.findall(r'(?m)^\[([^\]]+)\]', raw)
+          print('remotes_n=%d' % len(names))
+          for n in names:
+              print('  remote len=%d md5=%s' % (len(n), hashlib.md5(n.encode()).hexdigest()[:12]))
+          for target in ('ydy2:五星', 'ydy2:', 'ydy2:五星/'):
+              p = subprocess.run(['rclone', 'lsf', target, '--max-depth', '1', '--files-only'],
+                                 capture_output=True, text=True)
+              files = [l for l in p.stdout.splitlines() if l.strip()]
+              print('probe %r rc=%d files=%d' % (target, p.returncode, len(files)))
+              if p.returncode:
+                  print('  err=' + p.stderr.strip()[:160].replace('\n', ' '))
+              else:
+                  vids = [f for f in files if f.lower().endswith(('.mp4', '.mkv', '.ts', '.avi', '.wmv', '.mov', '.m4v', '.rmvb'))]
+                  srts = [f for f in files if f.lower().endswith('.srt')]
+                  print('  vids=%d srts=%d' % (len(vids), len(srts)))
+                  print('  sample=' + repr(vids[:3]))
+          p = subprocess.run(['rclone', 'lsf', 'ydy2:', '--max-depth', '1', '--dirs-only'], capture_output=True, text=True)
+          dirs = [l for l in p.stdout.splitlines() if l.strip()]
+          print('ydy2 root dirs rc=%d n=%d' % (p.returncode, len(dirs)))
+          for x in dirs:
+              print('  dir len=%d md5=%s' % (len(x), hashlib.md5(x.encode()).hexdigest()[:12]))
+          if p.returncode:
+              print('  err=' + p.stderr.strip()[:160].replace('\n', ' '))
+          PY
