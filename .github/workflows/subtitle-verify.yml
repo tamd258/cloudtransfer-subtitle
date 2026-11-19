@@ -2,8 +2,8 @@ name: subtitle-verify
 
 # 字幕质量校验(第二段的前置关卡): 扫描源目录所有 .srt, 逐条查
 #   空条目 / 元信息泄漏 / 单条过长 / 非日文内容, 报告打进 run 日志。
-# 手动跑一次即可确认字幕没问题。
-# Secrets: RCLONE_CONF / PATHS_JSON
+# 手动跑一次即可确认字幕没问题; 报告进 run 日志 + Telegram。
+# Secrets: RCLONE_CONF / PATHS_JSON / YDY_DAV_TOKEN / TG_TOKEN / TG_CHAT_ID
 
 on:
   schedule:
@@ -60,7 +60,10 @@ jobs:
           printf '\n[ydy2]\ntype = webdav\nurl = https://abcd.tammader.de5.net/dav/ydy2\nvendor = other\nbearer_token = %s\n' "$YDY_DAV_TOKEN" >> ~/.config/rclone/rclone.conf
           rclone listremotes
 
-      - name: 校验 srt 质量(报告打进日志)
+      - name: 校验 srt 质量(日志 + Telegram)
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           python3 verify_srt.py --tg \
             --max-bad-file-ratio "${{ inputs.max_bad_file_ratio || '0.02' }}" \
