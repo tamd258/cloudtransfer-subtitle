@@ -193,9 +193,10 @@ jobs:
           set -e
           if [ -n "$ONLY_FILE" ]; then
             echo "(单文件验证模式)"
-            ARGS="--budget-min $BUDGET_MIN --file $ONLY_FILE"
-            if [ "$APPLY" = "true" ]; then ARGS="$ARGS --apply"; fi
-            python3 subtitle_translate.py $ARGS
+            # 用位置参数传, 文件名含空格/中文不会被拆开
+            set -- --budget-min "$BUDGET_MIN" --file "$ONLY_FILE"
+            if [ "$APPLY" = "true" ]; then set -- "$@" --apply; fi
+            python3 subtitle_translate.py "$@"
             exit 0
           fi
           if [ "$EVENT_NAME" = "schedule" ]; then
