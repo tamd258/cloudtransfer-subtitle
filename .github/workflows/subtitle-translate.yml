@@ -53,6 +53,14 @@ on:
         description: "单文件验证模式: 只处理该文件(相对源目录, 可含子目录, 如 字幕版/xxx.mp4)"
         required: false
         default: ""
+      src_remote:
+        description: "临时覆盖源远端(如 gd6x); 留空=用 PATHS_JSON 的 SUB_SRC"
+        required: false
+        default: ""
+      src_dir:
+        description: "临时覆盖源目录(如 out3); 留空=用 PATHS_JSON 的 SUB_DIR"
+        required: false
+        default: ""
 
 concurrency:
   group: subtitle-translate-${{ inputs.batch_tag || github.run_id }}
@@ -63,6 +71,9 @@ permissions:
 
 env:
   PATHS_JSON: ${{ secrets.PATHS_JSON }}
+  # 手动 dispatch 可临时覆盖源(留空则走 PATHS_JSON 的 SUB_SRC/SUB_DIR)
+  SUB_SRC: ${{ inputs.src_remote || '' }}
+  SUB_DIR: ${{ inputs.src_dir || '' }}
   # 中译开关: 仓库 Variables 里 TRANSLATE_ZH=true 即中译(默认关, 只出日文 srt)
   TRANSLATE: ${{ vars.TRANSLATE_ZH || 'false' }}
   SUBTITLE_API_BASE: ${{ secrets.SUBTITLE_API_BASE }}
@@ -204,10 +215,11 @@ jobs:
         run: df -h / | tail -1
 
       # 自接力: 本批干完立刻补满并行(不依赖 GitHub cron —— 实测 cron 会数小时不响)。
+      # 单文件验证 / 临时覆盖源 模式下绝不自接力(2026-11-20 实测: 单文件测试误发 7 个全量批次)。
       - name: 自接力补满并行
         # !cancelled(): 被取消的 run 不许再自接力 —— 否则一取消就触发 relay 洪水
         # (2026-11-18 实测: 取消 20 个批次 → 瞬间多出 ~50 个重复批次)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.file || '') == '' && (inputs.src_remote || '') == '' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
