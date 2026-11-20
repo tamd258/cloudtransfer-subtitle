@@ -72,6 +72,12 @@ _WHISPER_ALIAS = {
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
     "large-v3_turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
     "large-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    # 日语专用微调(推荐): 同规模日语更准, 直接是 CT2 仓库, faster-whisper 可加载
+    "kotoba": "kotoba-tech/kotoba-whisper-v2.0-faster",
+    "kotoba-v2": "kotoba-tech/kotoba-whisper-v2.0-faster",
+    "kotoba-v2.1": "kotoba-tech/kotoba-whisper-v2.1-faster",
+    "kotoba-whisper-v2.0-faster": "kotoba-tech/kotoba-whisper-v2.0-faster",
+    "kotoba-whisper-v2.1-faster": "kotoba-tech/kotoba-whisper-v2.1-faster",
 }
 
 
@@ -86,7 +92,19 @@ XLATE_CONC = int(os.environ.get("XLATE_CONC", "4"))        # 并发翻译请求�
 XLATE_MAX_CHARS = int(os.environ.get("XLATE_MAX_CHARS", "1800"))  # 每请求总字长上限(防模型输出截断)
 WHISPER_THREADS = int(os.environ.get("WHISPER_THREADS", "4"))
 WHISPER_BATCH = int(os.environ.get("WHISPER_BATCH", "8"))  # 批量推理批大小(BatchedInferencePipeline)
-WHISPER_BEAM = int(os.environ.get("WHISPER_BEAM", "1"))    # 1=贪心, 最快
+WHISPER_BEAM = int(os.environ.get("WHISPER_BEAM", "5"))    # 5=束搜索(精度优先); 1=贪心(最快)
+# --- ASR 质量旋钮(2026-11-20 质量升级) ---
+# 日文专用模型优先: kotoba-whisper 是 whisper-large-v3 的日语微调, 同规模下日语错字率明显低
+ASR_MODEL = (os.environ.get("ASR_MODEL") or "kotoba-whisper-v2.0-faster").strip()
+ASR_FALLBACK = (os.environ.get("ASR_FALLBACK") or "large-v3").strip()
+# 日语 initial_prompt: 促使模型输出带句读的完整句, 明显改善切句与断句质量
+ASR_PROMPT = (os.environ.get("ASR_PROMPT") or
+              "以下は日本語の会話です。句読点を入れて、聞き取れた内容をそのまま正確に書き起こしてください。").strip()
+# 转写后 LLM 校对(修听写错字/错假名/重复循环, 不翻译不合并), 默认开
+ASR_FIX = (os.environ.get("ASR_FIX", "on").strip().lower() in ("1", "on", "true", "yes"))
+ASR_FIX_MODEL = (os.environ.get("ASR_FIX_MODEL") or "deepseek-v4-flash").strip()
+ASR_FIX_BATCH = int(os.environ.get("ASR_FIX_BATCH", "30"))
+HALLU_SIL = float(os.environ.get("HALLUCINATION_SILENCE_THRESHOLD", "2.0"))
 BURN_PRESET = os.environ.get("BURN_PRESET", "ultrafast")   # veryfast -> ultrafast
 BURN_CRF = os.environ.get("BURN_CRF", "23")
 BURN_MODE = os.environ.get("BURN_MODE", "hard")            # hard=烧进画面 / soft=软字幕(近乎免转码)
@@ -239,10 +257,25 @@ def transcribe(video_path, whisper_model, max_seconds=0):
     """
     from faster_whisper import WhisperModel, BatchedInferencePipeline
     resolved = resolve_whisper_model(whisper_model)
-    log("加载 whisper 模型 %s (解析=%s, CPU int8, threads=%d)..." % (
-        whisper_model, resolved, WHISPER_THREADS))
-    model = WhisperModel(resolved, device="cpu", compute_type="int8",
-                         cpu_threads=WHISPER_THREADS, num_workers=1)
+    log("加载 whisper 模型 %s (解析=%s, CPU int8, threads=%d, beam=%d)..." % (
+        whisper_model, resolved, WHISPER_THREADS, WHISPER_BEAM))
+    # 模型加载失败自动回退(日语微调仓库若不可用 -> 退回 large-v3), 不让整组任务直接死掉
+    model, err_last, cands = None, None, []
+    for c in [resolved, resolve_whisper_model(ASR_FALLBACK)]:
+        if c and c not in cands:
+            cands.append(c)
+    for cand in cands:
+        try:
+            model = WhisperModel(cand, device="cpu", compute_type="int8",
+                                 cpu_threads=WHISPER_THREADS, num_workers=1)
+            resolved = cand
+            break
+        except Exception as e:
+            err_last = e
+            log("!! 模型加载失败 %s: %s" % (cand, str(e)[:160]))
+    if model is None:
+        raise RuntimeError("whisper 模型全部加载失败: %s" % err_last)
+    log("实际使用模型: %s" % resolved)
     pipe = BatchedInferencePipeline(model=model)
 
     # 紧 VAD: 这类片对白稀疏, 但阈值过高会把对白整段滤掉(旧版实测 long-audio 出 0 条)
@@ -265,10 +298,19 @@ def transcribe(video_path, whisper_model, max_seconds=0):
         return out
 
     def _run(use_vad, vad_params=None):
-        log("开始转写(日文, vad=%s, beam=%d, batch=%d, max_s=%s)..." % (
-            use_vad, WHISPER_BEAM, WHISPER_BATCH, max_seconds or "full"))
+        log("开始转写(日文, vad=%s, beam=%d, batch=%d, prompt=%s, max_s=%s)..." % (
+            use_vad, WHISPER_BEAM, WHISPER_BATCH, "on" if ASR_PROMPT else "off",
+            max_seconds or "full"))
+        # 质量参数: 束搜索 + 压缩比/对数概率双阈值挡掉幻觉与静音误出 + 重复惩罚防循环
         kw = dict(language="ja", beam_size=WHISPER_BEAM, condition_on_previous_text=False,
-                  vad_filter=use_vad)
+                  vad_filter=use_vad, temperature=0.0,
+                  compression_ratio_threshold=2.2, log_prob_threshold=-1.0,
+                  no_speech_threshold=0.5, repetition_penalty=1.02)
+        if ASR_PROMPT:
+            kw["initial_prompt"] = ASR_PROMPT
+        if use_vad and HALLU_SIL > 0:
+            # 长静音段幻觉抑制(只在有 VAD 时生效)
+            kw["hallucination_silence_threshold"] = HALLU_SIL
         if use_vad and vad_params:
             kw["vad_parameters"] = vad_params
         if max_seconds or not use_vad:
@@ -366,6 +408,66 @@ def split_long_segments(segs, max_dur=None, max_chars=None):
             t = e
             if t >= en - 0.01:
                 break
+    return out
+
+
+# ---------------- ASR 校对: 转写后用 LLM 修听写错误(不翻译/不合并条目) ----------------
+# 为什么需要: whisper 系模型对成人向词汇(チンポ/マンコ/中出し 等)和喘息极易听错,
+# 而中文翻译的前提是日文原文正确。这一道只改错字/错假名/重复循环, 条目数与顺序不变。
+_ASR_FIX_SYS = (
+    "你是日语音频转写的校对员。输入是 JSON 数组 [{\"i\":序号,\"t\":日文文本}], "
+    "t 是 whisper 转写出来的一行日文字幕, 可能有听错、错假名、漏字、单词重复循环。\n"
+    "请只做以下修正:\n"
+    "1. 修正明显听错的词(结合成人向影像的常见用语判断, 如「ちんぽ」「まんこ」「いかせる」等);\n"
+    "2. 修正错假名/错汉字/助词错误, 补回被漏掉的助词, 但不添加原文没有的内容;\n"
+    "3. 去掉同一词的病态重复(如「あぁあぁあぁあぁ」压到 2-3 个), 但保留真实的连呼;\n"
+    "4. 不改写语气、不改敬语层级、不翻译成中文、不合并或拆分条目、不增删条目数量。\n"
+    "严格只返回 JSON 数组 [{\"i\":原i,\"t\":修正后的日文}], 顺序与输入一致, 不要任何解释。")
+
+
+def asr_fix_segments(segs, batch_size=None):
+    """segs:[(st,en,text)] -> 同结构, 文本经 LLM 校对。任一批失败则保留该批原文。"""
+    if not segs or not API_BASE or not API_KEY:
+        return segs
+    bs = batch_size or ASR_FIX_BATCH
+    models = [ASR_FIX_MODEL, MODEL, MODEL_FB]
+    out = list(segs)
+    fixed_n = 0
+    for s in range(0, len(out), bs):
+        chunk = out[s:s + bs]
+        payload = [{"i": i, "t": t} for i, (_a, _b, t) in enumerate(chunk)]
+        got = None
+        for model in models:
+            try:
+                raw = _post_chat(model, [{"role": "system", "content": _ASR_FIX_SYS},
+                                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+                                 timeout=180)
+                arr = _extract_json_array(raw)
+                if not isinstance(arr, list):
+                    continue
+                m = {}
+                for it in arr:
+                    if isinstance(it, dict) and "i" in it and str(it.get("t", "")).strip():
+                        try:
+                            m[int(it["i"])] = str(it["t"]).strip()
+                        except (TypeError, ValueError):
+                            continue
+                if len(m) == len(chunk):
+                    got = m
+                    break
+            except Exception as e:
+                log("  ASR 校对 %s 失败: %s" % (model, str(e)[:120]))
+        if got is None:
+            log("  !! ASR 校对批 %d 失败, 保留原始转写" % (s // bs + 1))
+            continue
+        for i, (st, en, tx) in enumerate(chunk):
+            nt = got.get(i, tx)
+            # 校对只允许"小幅修改": 长度剧烈变化视为模型乱改, 保留原文
+            if nt and 0.4 <= (len(nt) / max(1, len(tx))) <= 2.5:
+                out[s + i] = (st, en, nt)
+                if nt != tx:
+                    fixed_n += 1
+    log("ASR 校对完成: 修正 %d/%d 条" % (fixed_n, len(out)))
     return out
 
 
@@ -913,6 +1015,11 @@ def process_group(remote, path, base, parts, workdir, apply, probe_seconds=0, bu
             try: os.remove(p)
             except Exception: pass
         return
+    if ASR_FIX and segs:
+        try:
+            segs = asr_fix_segments(segs)
+        except Exception as e:
+            log("!! ASR 校对异常(继续用原始转写): %s" % str(e)[:150])
     if not segs:
         # 整组都没语音(静音/纯音乐): 给每个分片写空 srt 占位。
         # 不写占位的话「组内每片都有同名 srt」永远不成立 -> 这组每轮都被重新下载重传(死循环)。
@@ -985,6 +1092,55 @@ def process_group(remote, path, base, parts, workdir, apply, probe_seconds=0, bu
             pass
 
 
+def run_single_file(remote, path, rel, apply):
+    """单文件验证模式: 对指定文件(可含子目录)转写+校对+翻译, srt 写回同目录。
+
+    用于换模型/换参数后的抽样验收: 不动其它组, 幂等与分组逻辑都不参与。
+    """
+    log("=== 单文件模式: %s ===" % rel)
+    if not apply:
+        log("(演练模式, 只下载不处理) —— 去掉 --apply 之外的参数检查")
+        return
+    workdir = tempfile.mkdtemp(prefix="subone_")
+    gdir = os.path.join(workdir, "one")
+    os.makedirs(gdir, exist_ok=True)
+    local = os.path.join(gdir, os.path.basename(rel))
+    rc, out, err = run(["rclone", "copyto", "%s:%s/%s" % (remote, path, rel), local,
+                        "--retries", "3", "--stats-one-line", "--stats", "20s"])
+    if rc != 0 or not os.path.exists(local):
+        raise SystemExit("!! 下载失败: %s" % ((err or out)[:300]))
+    log("下载完成 %.1f MB" % (os.path.getsize(local) / 1048576.0))
+
+    t0 = time.time()
+    segs = transcribe(local, WHISPER_MODEL, max_seconds=0)
+    log("转写耗时 %.1f 分钟, 共 %d 条" % ((time.time() - t0) / 60.0, len(segs)))
+    if ASR_FIX and segs:
+        try:
+            segs = asr_fix_segments(segs)
+        except Exception as e:
+            log("!! ASR 校对异常(用原始转写): %s" % str(e)[:150])
+    if not segs:
+        raise SystemExit("!! 没转写出任何字幕")
+
+    if TRANSLATE_ON:
+        zh = translate_segments(segs)
+    else:
+        zh = segs
+        log("翻译关闭(TRANSLATE=off): 输出日文 srt")
+
+    stem = os.path.splitext(os.path.basename(rel))[0]
+    local_srt = os.path.join(gdir, stem + ".srt")
+    write_srt(zh, local_srt)
+    dst = "%s:%s/%s.srt" % (remote, path, os.path.splitext(rel)[0])
+    rc2, o2, e2 = run(["rclone", "copyto", local_srt, dst, "--retries", "3"])
+    log("上传 %s -> rc=%d %s" % ("<srt>", rc2, (e2 or "")[:150]))
+    log("=== 前 12 条预览 ===")
+    for st, en, tx in zh[:12]:
+        log("  [%.1f-%.1f] %s" % (st, en, tx))
+    log("srt 行数=%d, 本地路径=%s" % (len(zh), local_srt))
+    log("保留本地文件供下载核对: %s" % gdir)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -998,13 +1154,20 @@ def main():
     ap.add_argument("--burn-only", action="store_true", help="(已停用) 补烧模式; 当前流程不烧录, 传了会直接报错退出")
     ap.add_argument("--fix-srt", action="store_true", help="修复模式: 重译已有 srt 的日文残留, 写回并可选重烧硬字幕")
     ap.add_argument("--no-reburn", action="store_true", help="配合 --fix-srt: 只修 srt 不重烧视频")
+    ap.add_argument("--file", default="",
+                    help="单文件验证模式: 只处理该文件(相对源目录, 可含子目录, 如 字幕版/xxx.mp4)")
     a = ap.parse_args()
 
     if not SRC_REMOTE:
         raise SystemExit("!! 缺少 SRC_REMOTE(SUB_SRC) —— 检查 Secret PATHS_JSON")
 
     deadline = time.time() + a.budget_min * 60
-    log("源=%s:%s | 翻译模型=%s | whisper=%s | apply=%s" % (SRC_REMOTE, SRC_DIR, MODEL, WHISPER_MODEL, a.apply))
+    if a.file:
+        run_single_file(SRC_REMOTE, SRC_DIR, a.file, a.apply)
+        return
+    log("源=%s:%s | 翻译模型=%s | ASR=%s(beam=%d, 校对=%s) | 中译=%s | apply=%s" % (
+        SRC_REMOTE, SRC_DIR, MODEL, WHISPER_MODEL, WHISPER_BEAM,
+        "on" if ASR_FIX else "off", "on" if TRANSLATE_ON else "off", a.apply))
     _terms = _load_terms_text()
     log("翻译规则: 附加规则=%s, 术语表=%s" % (
         "有(%d字)" % len(EXTRA_RULES) if EXTRA_RULES else "无",
@@ -1100,3 +1263,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
