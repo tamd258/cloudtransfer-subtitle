@@ -30,9 +30,9 @@ on:
         required: false
         default: "300"
       whisper_model:
-        description: "whisper 模型(large-v3 最准 / large-v3-turbo 快 / medium / small)"
+        description: "ASR 模型(kotoba-whisper-v2.0-faster 日语专用, 推荐 / large-v3 通用 / large-v3-turbo 快)"
         required: false
-        default: "large-v3"
+        default: "kotoba-whisper-v2.0-faster"
       probe_only:
         description: "验证用: 只转写前 N 秒(如 120), 不上传; 0=正常全量"
         required: false
@@ -49,6 +49,10 @@ on:
         description: "配合 only: 即使已有同名 srt 也强制重跑"
         required: false
         default: "false"
+      file:
+        description: "单文件验证模式: 只处理该文件(相对源目录, 可含子目录, 如 字幕版/xxx.mp4)"
+        required: false
+        default: ""
 
 concurrency:
   group: subtitle-translate-${{ inputs.batch_tag || github.run_id }}
@@ -59,12 +63,22 @@ permissions:
 
 env:
   PATHS_JSON: ${{ secrets.PATHS_JSON }}
-  TRANSLATE: "off"                                     # 只出日文 srt(改 on 才做中译)
+  # 中译开关: 仓库 Variables 里 TRANSLATE_ZH=true 即中译(默认关, 只出日文 srt)
+  TRANSLATE: ${{ vars.TRANSLATE_ZH || 'false' }}
+  SUBTITLE_API_BASE: ${{ secrets.SUBTITLE_API_BASE }}
+  SUBTITLE_API_KEY: ${{ secrets.SUBTITLE_API_KEY }}
+  SUBTITLE_MODEL: ${{ vars.SUBTITLE_MODEL || 'deepseek-v4-flash' }}
+  SUBTITLE_MODEL_FB: ${{ vars.SUBTITLE_MODEL_FB || 'gemma-4-31b-it' }}
+  # --- ASR 质量(2026-11-20 升级: 日语专用模型 + 束搜索 + 转写后 LLM 校对) ---
+  ASR_MODEL: ${{ vars.ASR_MODEL || 'kotoba-whisper-v2.0-faster' }}
+  ASR_FALLBACK: ${{ vars.ASR_FALLBACK || 'large-v3' }}
+  ASR_FIX: ${{ vars.ASR_FIX || 'on' }}
+  ASR_FIX_MODEL: ${{ vars.ASR_FIX_MODEL || 'deepseek-v4-flash' }}
   MAX_SEG_DUR: ${{ vars.MAX_SEG_DUR || '8' }}      # 单条字幕最长秒数
   MAX_SEG_CHARS: ${{ vars.MAX_SEG_CHARS || '42' }} # 单条字幕最长字数
   WHISPER_THREADS: ${{ vars.WHISPER_THREADS || '4' }}
   WHISPER_BATCH: ${{ vars.WHISPER_BATCH || '8' }}
-  WHISPER_BEAM: ${{ vars.WHISPER_BEAM || '1' }}
+  WHISPER_BEAM: ${{ vars.WHISPER_BEAM || '5' }}
 
 jobs:
   translate:
@@ -159,16 +173,24 @@ jobs:
           ONLY: ${{ inputs.only || '' }}
           LIMIT_GROUPS: ${{ inputs.limit_groups || '1' }}
           BUDGET_MIN: ${{ inputs.budget_min || '300' }}
-          WHISPER_MODEL: ${{ inputs.whisper_model || 'large-v3' }}
+          WHISPER_MODEL: ${{ inputs.whisper_model || vars.ASR_MODEL || 'kotoba-whisper-v2.0-faster' }}
           PROBE_ONLY: ${{ inputs.probe_only || '0' }}
           START_INDEX: ${{ inputs.start_index || '0' }}
           FORCE: ${{ inputs.force || 'false' }}
+          ONLY_FILE: ${{ inputs.file || '' }}
         run: |
           set -e
+          if [ -n "$ONLY_FILE" ]; then
+            echo "(单文件验证模式)"
+            ARGS="--budget-min $BUDGET_MIN --file $ONLY_FILE"
+            if [ "$APPLY" = "true" ]; then ARGS="$ARGS --apply"; fi
+            python3 subtitle_translate.py $ARGS
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "schedule" ]; then
-            APPLY="true"; LIMIT_GROUPS="3"; WHISPER_MODEL="large-v3"; START_INDEX="0"
+            APPLY="true"; LIMIT_GROUPS="3"; START_INDEX="0"
             ONLY=""
-            echo "(定时触发: 处理3组 large-v3 只出日文 srt)"
+            echo "(定时触发: 处理3组, ASR=$(echo $WHISPER_MODEL))"
           fi
           ARGS="--limit-groups $LIMIT_GROUPS --budget-min $BUDGET_MIN --start-index $START_INDEX"
           if [ -n "$ONLY" ]; then ARGS="$ARGS --only $ONLY"; fi
@@ -198,3 +220,4 @@ jobs:
         run: |
           sleep $((RANDOM % 25))
           python3 subtitle_dispatch.py
+
