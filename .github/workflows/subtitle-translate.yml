@@ -219,7 +219,9 @@ jobs:
       - name: 自接力补满并行
         # !cancelled(): 被取消的 run 不许再自接力 —— 否则一取消就触发 relay 洪水
         # (2026-11-18 实测: 取消 20 个批次 → 瞬间多出 ~50 个重复批次)
-        if: ${{ !cancelled() && (inputs.file || '') == '' && (inputs.src_remote || '') == '' }}
+        # 验证模式(file / 覆盖源 / probe 探针)一律不自接力:
+        # (2026-11-20 补 probe_only —— 否则一次断句探针测试会误发 8 个全量批次)
+        if: ${{ !cancelled() && (inputs.file || '') == '' && (inputs.src_remote || '') == '' && (inputs.probe_only || '0') == '0' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}

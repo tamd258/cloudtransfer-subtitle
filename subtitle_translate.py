@@ -333,30 +333,62 @@ def transcribe(video_path, whisper_model, max_seconds=0):
         out = _run(False)
     log("转写完成: %d 条(重切前)" % len(out))
     out = split_long_segments(out)
-    log("转写完成: %d 条(按标点重切后, 单条<=%.0fs)" % (len(out), MAX_SEG_DUR))
+    log("转写完成: %d 条(按句重切后, 完整句优先/软上限%.0fs)" % (len(out), MAX_SEG_DUR))
     return out
 
 
 # ---------------- 长段重切(字幕后处理) ----------------
-# 批量推理管线会把整段对白并成 30~200 秒的长块, 直接当字幕不可用:
-# 这里按标点切成句, 再按字长比例分配时间, 保证单条 <= MAX_SEG_DUR 秒、<= MAX_SEG_CHARS 字。
+# 批量推理管线会把整段对白并成 30~200 秒的长块, 直接当字幕不可用。
+# 2026-11-20 调整: 断句以「语义完整的句子」为原子单位 ——
+#   句末标点(。！？!?…．)才是真正的断句点; 逗号/顿号(，、,)只是句中停顿, 不再强制切行。
+#   这样一句本来一口气能讲完的话不会被拦腰截断、跳到下一行。
+#   只有单句本身就明显超长(>软上限)时, 才降级: 先在句内停顿处切, 最后才按字数硬切兜底。
 MAX_SEG_DUR = float(os.environ.get("MAX_SEG_DUR", "8"))
 MAX_SEG_CHARS = int(os.environ.get("MAX_SEG_CHARS", "42"))
-_PUNCT_SPLIT = re.compile(r"(?<=[。、，！？!?…．])")
-
-def _sentences(tx):
-    s = [x.strip() for x in _PUNCT_SPLIT.split(tx) if x and x.strip()]
-    return s or [tx]
-
-
+_END_PUNCT = "。！？!?…．"          # 句末: 强断句边界
+_MID_PUNCT = "，、,"              # 句内停顿: 仅单句超长时的次级切点
+_END_SPLIT = re.compile(r"(?<=[%s])" % _END_PUNCT)
+_MID_SPLIT = re.compile(r"(?<=[%s])" % _MID_PUNCT)
 _LETTER = re.compile(r"[ぁ-んァ-ヶー一-龥A-Za-z0-9]")
 
 
-def split_long_segments(segs, max_dur=None, max_chars=None):
-    """把过长的转写段按标点/字长重切成字幕行, 时间按字长比例分配。
+def _atomic_sentences(tx):
+    """按句末标点切成完整句子(标点留在句尾); 纯标点碎片并回上一句。"""
+    parts = [x.strip() for x in _END_SPLIT.split(tx) if x and x.strip()]
+    out = []
+    for p in parts:
+        if _LETTER.search(p):
+            out.append(p)
+        elif out:
+            out[-1] += p          # 只剩「…」之类并回上一句
+    return out or ([tx.strip()] if tx.strip() else [])
 
-    segs: [(start, end, text)] -> [(start, end, text)]  (单条 dur<=max_dur, 字数<=max_chars)
-    纯标点/纯符号的段(如只剩一个「、」)直接丢掉, 不单独成行。
+
+def _soft_split(s, cap, splitter):
+    """把超长句在次级标点处切成 <=cap 的块, 标点留在块尾。"""
+    subs = [x for x in splitter.split(s) if x]
+    blocks, cur = [], ""
+    for sub in subs:
+        if not cur:
+            cur = sub
+        elif len(cur) + len(sub) <= cap:
+            cur += sub
+        else:
+            blocks.append(cur)
+            cur = sub
+    if cur:
+        blocks.append(cur)
+    return blocks
+
+
+def split_long_segments(segs, max_dur=None, max_chars=None):
+    """把过长的转写段按「语义完整的句子」重切成字幕行, 时间按字长比例分配。
+
+    原则(2026-11-20): 完整一句话优先整句独占一行, 不因字数/时长上限被拦腰截断。
+      1) 按句末标点成句 -> 每句为原子单元;
+      2) 相邻句能一起塞进上限就合并(少碎行), 塞不下才各自成行;
+      3) 单个句子自身超上限 -> 先按句内停顿切, 仍超才按字数硬切兜底。
+    segs: [(start, end, text)] -> [(start, end, text)]
     """
     max_dur = max_dur or MAX_SEG_DUR
     max_chars = max_chars or MAX_SEG_CHARS
@@ -369,38 +401,52 @@ def split_long_segments(segs, max_dur=None, max_chars=None):
         if dur <= max_dur and len(tx) <= max_chars:
             out.append((st, en, tx))
             continue
-        # 纯标点的句子并到上一句, 避免出现只有「、」这种行
-        sents = []
-        for s in _sentences(tx):
-            if _LETTER.search(s):
-                sents.append(s)
-            elif sents:
-                sents[-1] += s
+
+        per_char = dur / max(1, len(tx))                       # 每字多少秒
+        cap = max(6, min(max_chars, int(max_dur / per_char)))  # 合并多句时正常每行字数上限
+        # 软容忍: 一个完整句子宁可略超(+50%字 / +2s)也别切断语义;
+        #         只有"把多个句子合并到一行"时才用严格 cap, 避免整行过长。
+        hard_cap = min(max_chars + 16, int(cap * 1.5))
+        hard_dur = max_dur + 2.0
+
+        sents = _atomic_sentences(tx)
         if not sents:
             continue
-        per_char = dur / max(1, len(tx))                      # 每字多少秒
-        cap = max(6, min(max_chars, int(max_dur / per_char)))  # 本段内每行最多几个字
-        lines, cur = [], ""
+
+        # 单句自身超长 -> 降级切分(先句内停顿, 再按字硬切)
+        units = []   # [(文本, 是否可与其他句合并)]
         for s in sents:
-            while len(s) > cap:                                # 单句超长 -> 硬切
-                if cur:
-                    lines.append(cur)
-                    cur = ""
-                lines.append(s[:cap])
-                s = s[cap:]
-            if not cur:
-                cur = s
-            elif len(cur) + len(s) <= cap:
-                cur += s
-            else:
+            s_dur = len(s) * per_char
+            if len(s) <= hard_cap and s_dur <= hard_dur:
+                units.append((s, True))
+                continue
+            for b in _soft_split(s, hard_cap, _MID_SPLIT):
+                while len(b) > hard_cap:                      # 子句仍超长 -> 按字硬切兜底
+                    units.append((b[:hard_cap], False))
+                    b = b[hard_cap:]
+                if b:
+                    units.append((b, False))
+
+        # 合并相邻「可合并」短句, 减少碎行; 硬切出来的块不再参与合并。
+        lines, cur, cur_len = [], "", 0
+        for u, mergeable in units:
+            if cur and (not mergeable or cur_len + len(u) > cap
+                        or (cur_len + len(u)) * per_char > max_dur):
                 lines.append(cur)
-                cur = s
+                cur, cur_len = "", 0
+            cur += u
+            cur_len += len(u)
+            if not mergeable:
+                lines.append(cur)
+                cur, cur_len = "", 0
         if cur:
             lines.append(cur)
+
+        # 按字长比例分配时间
+        total = sum(len(x) for x in lines) or 1
         t = st
         for ln in lines:
-            d = len(ln) * per_char
-            d = max(0.6, min(max_dur, d))
+            d = max(0.6, dur * len(ln) / total)
             e = min(en, t + d)
             if e - t < 0.4:
                 e = min(en, t + 0.4)
