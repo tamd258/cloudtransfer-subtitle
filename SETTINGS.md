@@ -60,7 +60,8 @@
 | `subtitle-dispatch.yml` | schedule `8,18,28,38,48,58 * * * *` | 补满并发批次; 失败才发 TG |
 | `subtitle-report.yml` | schedule `43 */2` | 进度报告(日志 + TG) |
 | `subtitle-verify.yml` | schedule `17 */6` | srt 质量校验(日志 + TG) |
-| `subtitle-burn.yml` | 手动(已 disabled) | 烧录阶段已废弃, 保留只为兼容 |
+
+> 原 `subtitle-burn.yml`(烧录阶段)已于 2026-11-21 删除 —— 烧录代码与 `--burn-only` 一并移除。
 
 ## 六、srt 命名与完成判定
 

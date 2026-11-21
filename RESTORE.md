@@ -37,8 +37,8 @@ gh workflow enable subtitle-dispatch.yml
   中译与转写后 LLM 校对的代码已从 `subtitle_translate.py` **整体删除** —— **零 LLM 依赖**（无 API key、无网关调用）。
 - **srt 与视频同名**：`X.part002_D.mp4` → `X.part002_D.srt`；多分片组每片各一份，
   时间轴按各片时长切分（片内相对时间）。组内所有分片都有同名 srt 才算完成。
-- **不烧录**：`subtitle-burn.yml` 已删除；`BURN_VIDEO = False`；
-  `--burn-only` 会 `SystemExit`；dispatch 收到 `PHASE=burn` 直接退出。
+- **不烧录（代码已删）**：`subtitle-burn.yml` 已移除；`BURN_*` / `burn_subtitles()` / `--burn-only` 已从脚本删除；
+  dispatch 仍保留 `PHASE != translate` 的守卫，收到 `PHASE=burn` 直接退出。
 - **无 Telegram**：所有报告只打进 run 日志。
 - **翻译质量档**：已废弃 —— `QUALITY` / 采样 / 补译等中译逻辑保留在代码里但不再执行（`TRANSLATE=off`）。
 - **源**：`BAT_PATHS_JSON = {"SUB_SRC":"gd2","SUB_DIR":"out5"}`。

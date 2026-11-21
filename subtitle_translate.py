@@ -89,9 +89,6 @@ ASR_PROMPT = (os.environ.get("ASR_PROMPT") or
 # 2026-11-21: LLM 链路(中译 + 转写后 LLM 校对)已整体删除 ——
 # 本脚本零 LLM 依赖: 不读任何 API key, 不向任何网关发请求, 只跑本地 whisper 推理。
 HALLU_SIL = float(os.environ.get("HALLUCINATION_SILENCE_THRESHOLD", "2.0"))
-BURN_PRESET = os.environ.get("BURN_PRESET", "ultrafast")   # veryfast -> ultrafast
-BURN_CRF = os.environ.get("BURN_CRF", "23")
-BURN_MODE = os.environ.get("BURN_MODE", "hard")            # hard=烧进画面 / soft=软字幕(近乎免转码)
 
 # 分片命名: [已处理_]<base>.partNNN[_D].mp4  ；<base> 可能含中文/番号/空格
 _RE_PART = re.compile(r"(?:^|_)(?P<base>.+?)\.part(?P<idx>\d+)(?:_[A-Za-z])?\.(?P<ext>mp4|mkv|avi|wmv|mov|flv|m4v|rmvb|ts|mpg|mpeg|webm|3gp)$", re.I)
@@ -459,14 +456,6 @@ def write_srt(segs, path):
             f.write("%d\n%s --> %s\n%s\n\n" % (n, _fmt_ts(st), _fmt_ts(en), txt))
 
 
-def _parse_ts(s):
-    """"00:01:02,500" -> 秒(float)"""
-    s = s.strip()
-    hh, mm, rest = s.split(":")
-    ss, ms = rest.split(",")
-    return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000.0
-
-
 # ---------------- 同名 srt 命名 + 按分片切时间轴 ----------------
 def part_basenames(parts):
     """[(idx, fname), ...] -> [去扩展名的文件名, ...]  —— 即每个视频文件该配的 srt 名(不带 .srt)"""
@@ -516,93 +505,10 @@ def split_segments_by_parts(segs, durations):
     return out
 
 
-def parse_srt(path):
-    """解析 srt -> [(start, end, text)]"""
-    segs = []
-    txt = io.open(path, encoding="utf-8", errors="replace").read()
-    # 按空行分块
-    blocks = re.split(r"\r?\n\r?\n", txt.strip())
-    for blk in blocks:
-        lines = [l for l in blk.splitlines() if l.strip() != ""]
-        if len(lines) < 2:
-            continue
-        # 找含 --> 的行
-        ti = None
-        for idx, l in enumerate(lines):
-            if "-->" in l:
-                ti = idx
-                break
-        if ti is None:
-            continue
-        try:
-            a, b = lines[ti].split("-->")
-            st = _parse_ts(a)
-            en = _parse_ts(b)
-        except Exception:
-            continue
-        text = " ".join(lines[ti + 1:]).strip()
-        if text:
-            segs.append((st, en, text))
-    return segs
-
-
-# ---------------- 硬字幕烧制(本流程已停用) ----------------
-# 流程已改为「只出 srt, 不烧录」: BURN_VIDEO 恒为 False,
-# 下面的 burn_subtitles 保留但不会被调用(要恢复烧录就把 BURN_VIDEO 改回读环境变量)。
-BURN_VIDEO = False
-BURN_DIR = os.environ.get("BURN_DIR", "字幕版")   # (当前流程不产出此目录)
-# 烧制时字幕滤镜里要转义的字符(路径中的 : ' \ 等)
-def _ff_escape_path(p):
-    return p.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-
-
-def burn_subtitles(video_path, srt_local, base, remote, path, gdir):
-    """把 srt 硬烧进整片, 输出 <番号>_字幕版.mp4, 上传到 <源目录>/字幕版/
-
-    BURN_MODE=hard(默认): libx264 -preset ultrafast -crf 23(比 veryfast 快约 2-3 倍)
-    BURN_MODE=soft      : 视频流直接 copy, 字幕作为软字幕塞进 mp4(近乎免转码, 秒级)
-    """
-    out_mp4 = os.path.join(gdir, "burned.mp4")
-    vf = "subtitles='%s':force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=1,Shadow=0,MarginV=18'" % _ff_escape_path(srt_local)
-    if BURN_MODE == "soft":
-        log("装软字幕(视频流 copy, 不重编码)...")
-        rc, out, err = run(["ffmpeg", "-y", "-i", video_path, "-i", srt_local,
-                            "-map", "0:v:0", "-map", "0:a?", "-map", "1:0",
-                            "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text",
-                            "-metadata:s:s:0", "language=chi", out_mp4])
-    else:
-        log("开始烧制硬字幕(CPU 编码 preset=%s crf=%s)..." % (BURN_PRESET, BURN_CRF))
-        # 先试 -c:v copy 不行(烧字幕必须重编码), 直接 libx264 + 快速档
-        rc, out, err = run(["ffmpeg", "-y", "-i", video_path, "-vf", vf,
-                            "-c:v", "libx264", "-preset", BURN_PRESET, "-crf", BURN_CRF,
-                            "-x264-params", "rc-lookahead=0:sync-lookahead=0:bframes=0:ref=1:me=dia:subme=0:trellis=0:mbtree=0",
-                            "-threads", "0", "-c:a", "copy", out_mp4])
-    if rc != 0 or not os.path.exists(out_mp4):
-        log("!! 字幕封装/烧制失败: %s" % (err[-250:] if err else ""))
-        return False
-    log("输出完成 -> %.1f MB" % (os.path.getsize(out_mp4) / 1048576.0))
-    burn_name = "%s_字幕版.mp4" % base
-    dst = "%s:%s/%s/%s" % (remote, path, BURN_DIR, burn_name)
-    rc2, o2, e2 = run(["rclone", "copyto", out_mp4, dst, "--retries", "3",
-                       "--drive-chunk-size", "128M", "--multi-thread-streams", "4"])
-    log("上传字幕版视频 -> rc=%d" % rc2)
-    if rc2 != 0:
-        log("!! 上传字幕版视频失败: %s" % (e2[:200] if e2 else ""))
-    try:
-        os.remove(out_mp4)
-    except Exception:
-        pass
-    return rc2 == 0
-
-
 # ---------------- 主流程 ----------------
-def process_group(remote, path, base, parts, workdir, apply, probe_seconds=0, burn_only=False):
-    log("处理组 (parts=%d, probe=%s, burn_only=%s)" % (len(parts), probe_seconds or "off", burn_only))
+def process_group(remote, path, base, parts, workdir, apply, probe_seconds=0):
+    log("处理组 (parts=%d, probe=%s)" % (len(parts), probe_seconds or "off"))
     if not apply:
-        return
-    if burn_only:
-        # 补烧模式已停用(流程不再烧录)
-        log("!! 补烧模式已停用(BURN_VIDEO=False), 跳过该组")
         return
     t0 = time.time()
     gdir = os.path.join(workdir, "grp")
@@ -734,7 +640,6 @@ def main():
     ap.add_argument("--probe-only", type=int, default=0, help="只转写前 N 秒做验证(不上传)")
     ap.add_argument("--start-index", type=int, default=0, help="从待处理列表第 K 个开始(并行分批用)")
     ap.add_argument("--force", action="store_true", help="配合 --only: 即使已有 srt 也强制重跑(测试用)")
-    ap.add_argument("--burn-only", action="store_true", help="(已停用) 补烧模式; 当前流程不烧录, 传了会直接报错退出")
     ap.add_argument("--file", default="",
                     help="单文件验证模式: 只处理该文件(相对源目录, 可含子目录, 如 字幕版/xxx.mp4)")
     a = ap.parse_args()
@@ -765,17 +670,14 @@ def main():
     # 目标顺序: 按组总大小升序(小的先做, 巨型文件排最后, 避免阻塞)
     order_by_size = sorted(groups.keys(), key=lambda b: gsizes.get(b, 0))
 
-    if a.burn_only:
-        raise SystemExit("!! 本流程已改为「只出 srt, 不烧录」, --burn-only 已停用")
-    else:
-        targets = []
-        for base in order_by_size:
-            if base in done_groups and not a.force:
-                continue
-            if a.only and base != a.only:
-                continue
-            targets.append(base)
-        log("待处理组=%d (已跳过 %d 个已全片带字幕的组; 按大小升序)" % (len(targets), len(done_groups)))
+    targets = []
+    for base in order_by_size:
+        if base in done_groups and not a.force:
+            continue
+        if a.only and base != a.only:
+            continue
+        targets.append(base)
+    log("待处理组=%d (已跳过 %d 个已全片带字幕的组; 按大小升序)" % (len(targets), len(done_groups)))
 
     if a.list:
         for b in targets:
@@ -799,7 +701,7 @@ def main():
             break
         try:
             process_group(SRC_REMOTE, SRC_DIR, base, groups[base], workdir, a.apply,
-                          probe_seconds=a.probe_only, burn_only=False)
+                          probe_seconds=a.probe_only)
             ok += 1
         except Exception as e:
             fail += 1

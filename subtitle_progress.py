@@ -76,9 +76,7 @@ def collect():
         "done": done,                     # 已完成(组内视频全带同名 srt)
         "srt": len(srt_matched),          # 已配字幕的视频文件数
         "videos": len(vid_stem),          # 视频文件数
-        "burn": 0,                        # 流程已不烧录
         "pending": len(groups) - done,    # 还没配齐同名 srt 的组数
-        "srt_no_burn": 0,
         "orphan_srt": len(srt_all) - len(srt_matched),   # 没有同名视频的 srt
     }
 
