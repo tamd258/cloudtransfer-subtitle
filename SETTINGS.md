@@ -1,7 +1,7 @@
 # cloudtransfer · 设置清单(只出日文 srt + Telegram 报告)
 
 > 仓库: `tamd258/cloudtransfer-subtitle`(public, default branch `main`)
-> 更新时间: 2026-11-21(**取消 LLM 大模型**: 只做日文 ASR 识别出 srt, 不翻译、不做 LLM 校对)
+> 更新时间: 2026-11-21(**取消 LLM 大模型**: 只做日文 ASR 识别出 srt; 中译与 LLM 校对的代码已从脚本删除)
 
 ## 一、当前处理目录
 
@@ -49,7 +49,8 @@
 | `TRANSLATE_ZH` | (已废弃) | LLM 取消后不再读取, `TRANSLATE` 在 workflow 里硬编码 `off` |
 
 > LLM 相关配置(`SUBTITLE_API_BASE` / `SUBTITLE_API_KEY` / `SUBTITLE_MODEL` / `ASR_FIX_MODEL`)
-> 已从 `subtitle-translate.yml` 移除; 想做纯日语 ASR 之外的任何 LLM 加工, 需改文件重新配齐。
+> 已从 `subtitle-translate.yml` 移除, 对应的代码链路也已从 `subtitle_translate.py` 删除;
+> 脚本如今没有任何模型网关依赖, 想加回 LLM 加工需要重写。
 
 ## 五、Workflows
 

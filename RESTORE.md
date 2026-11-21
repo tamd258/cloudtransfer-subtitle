@@ -34,7 +34,7 @@ gh workflow enable subtitle-dispatch.yml
 ## 三、当前流程形态（2026-11-21 定版：纯日文 ASR）
 
 - **单阶段（纯识别）**：下载 → 拼接 → whisper/kotoba **日文**转写 → 按标点重切（≤8s/≤42字）→ 逐片上传**日文同名 srt**。
-  `TRANSLATE=off` 且 `ASR_FIX=off` —— **整条链路零 LLM 调用**（不发 `/chat/completions`，不读 `SUBTITLE_API_*`）。
+  中译与转写后 LLM 校对的代码已从 `subtitle_translate.py` **整体删除** —— **零 LLM 依赖**（无 API key、无网关调用）。
 - **srt 与视频同名**：`X.part002_D.mp4` → `X.part002_D.srt`；多分片组每片各一份，
   时间轴按各片时长切分（片内相对时间）。组内所有分片都有同名 srt 才算完成。
 - **不烧录**：`subtitle-burn.yml` 已删除；`BURN_VIDEO = False`；

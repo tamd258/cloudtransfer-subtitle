@@ -6,8 +6,8 @@ name: subtitle-translate
 #
 # 公开仓库: 日志全部脱敏(logmask), 真实盘名/目录名/番号/链接均不出现明文。
 # Secrets: RCLONE_CONF / PATHS_JSON / GH_TOKEN / YDY_DAV_TOKEN / TG_TOKEN / TG_CHAT_ID
-# 2026-11-21 取消 LLM 大模型: 翻译(TRANSLATE)与转写后 LLM 校对(ASR_FIX)固定 off,
-#   不再注入 SUBTITLE_API_* / SUBTITLE_MODEL* / ASR_FIX_MODEL, 网关一次都不会被调用。
+# 2026-11-21 取消 LLM 大模型: 中译(TRANSLATE)与转写后 LLM 校对(ASR_FIX)的代码已整体删除,
+#   也不再注入 SUBTITLE_API_* / SUBTITLE_MODEL* / ASR_FIX_MODEL, 网关一次都不会被调用。
 
 on:
   schedule:
@@ -76,9 +76,8 @@ env:
   SUB_SRC: ${{ inputs.src_remote || '' }}
   SUB_DIR: ${{ inputs.src_dir || '' }}
   # --- 纯日文识别模式(2026-11-21 定版): 不翻译、不调用任何 LLM 大模型 ---
-  # TRANSLATE / ASR_FIX 硬编码 off; 想恢复中译或 LLM 校对, 需要改本文件并重新配 SUBTITLE_API_*。
-  TRANSLATE: "off"
-  ASR_FIX: "off"
+  # 中译链路与转写后 LLM 校对的代码已从 subtitle_translate.py 整体删除, 不存在任何开关;
+  # 想恢复需重写脚本并重新配齐 SUBTITLE_API_* 与网关依赖。
   # --- ASR 质量: 日语专用模型 + 束搜索(纯本地推理, 与 LLM 无关) ---
   ASR_MODEL: ${{ vars.ASR_MODEL || 'kotoba-whisper-v2.0-faster' }}
   ASR_FALLBACK: ${{ vars.ASR_FALLBACK || 'large-v3' }}
