@@ -1,7 +1,7 @@
 # cloudtransfer · 设置清单(只出日文 srt + Telegram 报告)
 
 > 仓库: `tamd258/cloudtransfer-subtitle`(public, default branch `main`)
-> 更新时间: 2026-11-19(处理目录切到 `ydy2:五星`, 报告接回 Telegram)
+> 更新时间: 2026-11-21(**取消 LLM 大模型**: 只做日文 ASR 识别出 srt, 不翻译、不做 LLM 校对)
 
 ## 一、当前处理目录
 
@@ -25,7 +25,7 @@
 | `PATHS_JSON` | 路径字典(见上) |
 | `GH_TOKEN` | 调 GitHub API(dispatcher 补发批次、自接力、报告查运行状态) |
 | `TG_TOKEN` / `TG_CHAT_ID` | Telegram 报告/告警 |
-| `TRANSLATE_RULES` / `TRANSLATE_TERMS` | 中译规则与术语表(当前 `TRANSLATE=off` 用不到, 留着备用) |
+| `TRANSLATE_RULES` / `TRANSLATE_TERMS` | **已停用**: LLM 取消后中译链路不再调用, 可留可删 |
 
 ## 三、Telegram 报告(四处, 全走 `tgnotify.py`)
 
@@ -46,7 +46,10 @@
 |---|---|---|
 | `TARGET_PARALLEL` | 8 | dispatch 补满的并发批次数 |
 | `GROUPS_PER_RUN` | 6 | 每批处理几组 |
-| `TRANSLATE_ZH` | false | 是否中译(当前关) |
+| `TRANSLATE_ZH` | (已废弃) | LLM 取消后不再读取, `TRANSLATE` 在 workflow 里硬编码 `off` |
+
+> LLM 相关配置(`SUBTITLE_API_BASE` / `SUBTITLE_API_KEY` / `SUBTITLE_MODEL` / `ASR_FIX_MODEL`)
+> 已从 `subtitle-translate.yml` 移除; 想做纯日语 ASR 之外的任何 LLM 加工, 需改文件重新配齐。
 
 ## 五、Workflows
 

@@ -100,8 +100,11 @@ ASR_FALLBACK = (os.environ.get("ASR_FALLBACK") or "large-v3").strip()
 # 日语 initial_prompt: 促使模型输出带句读的完整句, 明显改善切句与断句质量
 ASR_PROMPT = (os.environ.get("ASR_PROMPT") or
               "以下は日本語の会話です。句読点を入れて、聞き取れた内容をそのまま正確に書き起こしてください。").strip()
-# 转写后 LLM 校对(修听写错字/错假名/重复循环, 不翻译不合并), 默认开
-ASR_FIX = (os.environ.get("ASR_FIX", "on").strip().lower() in ("1", "on", "true", "yes"))
+# 转写后 LLM 校对(修听写错字/错假名/重复循环, 不翻译不合并), 默认 **关**。
+# 2026-11-21 定版: 流程 = 纯日文 ASR 识别出 srt, 不翻译、不调用任何 LLM 大模型。
+# ASR_FIX 与 TRANSLATE 双关 → 整条链路零网关调用(不发 /chat/completions, 不读 SUBTITLE_API_*)。
+# 只有临时想开校对才设 ASR_FIX=on 并配齐 SUBTITLE_API_BASE/KEY。
+ASR_FIX = (os.environ.get("ASR_FIX", "off").strip().lower() in ("1", "on", "true", "yes"))
 ASR_FIX_MODEL = (os.environ.get("ASR_FIX_MODEL") or "deepseek-v4-flash").strip()
 ASR_FIX_BATCH = int(os.environ.get("ASR_FIX_BATCH", "30"))
 HALLU_SIL = float(os.environ.get("HALLUCINATION_SILENCE_THRESHOLD", "2.0"))
@@ -472,8 +475,9 @@ _ASR_FIX_SYS = (
 
 
 def asr_fix_segments(segs, batch_size=None):
-    """segs:[(st,en,text)] -> 同结构, 文本经 LLM 校对。任一批失败则保留该批原文。"""
-    if not segs or not API_BASE or not API_KEY:
+    """segs:[(st,en,text)] -> 同结构, 文本经 LLM 校对。任一批失败则保留该批原文。
+    LLM 已取消(ASR_FIX 默认 off): 未显式开启或没配网关时原样返回, 绝不外发请求。"""
+    if not ASR_FIX or not segs or not API_BASE or not API_KEY:
         return segs
     bs = batch_size or ASR_FIX_BATCH
     models = [ASR_FIX_MODEL, MODEL, MODEL_FB]
@@ -1211,13 +1215,16 @@ def main():
     if a.file:
         run_single_file(SRC_REMOTE, SRC_DIR, a.file, a.apply)
         return
-    log("源=%s:%s | 翻译模型=%s | ASR=%s(beam=%d, 校对=%s) | 中译=%s | apply=%s" % (
-        SRC_REMOTE, SRC_DIR, MODEL, WHISPER_MODEL, WHISPER_BEAM,
+    log("源=%s:%s | 模式=纯日文ASR(不翻译/零LLM) | ASR=%s(beam=%d, LLM校对=%s) | 中译=%s | apply=%s" % (
+        SRC_REMOTE, SRC_DIR, WHISPER_MODEL, WHISPER_BEAM,
         "on" if ASR_FIX else "off", "on" if TRANSLATE_ON else "off", a.apply))
-    _terms = _load_terms_text()
-    log("翻译规则: 附加规则=%s, 术语表=%s" % (
-        "有(%d字)" % len(EXTRA_RULES) if EXTRA_RULES else "无",
-        "有(%d条)" % (_terms.count("=>") if _terms else 0) if _terms else "无"))
+    if TRANSLATE_ON:
+        _terms = _load_terms_text()
+        log("翻译规则: 附加规则=%s, 术语表=%s" % (
+            "有(%d字)" % len(EXTRA_RULES) if EXTRA_RULES else "无",
+            "有(%d条)" % (_terms.count("=>") if _terms else 0) if _terms else "无"))
+    else:
+        log("翻译规则: 不适用(TRANSLATE=off, 只出日文识别 srt)")
 
     files = rclone_lsf(SRC_REMOTE, SRC_DIR)
     log("目录内文件数=%d" % len(files))

@@ -1,12 +1,13 @@
 name: subtitle-translate
 
-# 日文语音视频 → 日文 SRT 字幕(纯云端, 不翻译, 不烧录)
-#   分片按「番号」归组 → ffmpeg 拼整片 → faster-whisper(large-v3) 日文转写
+# 日文语音视频 → 日文 SRT 字幕(纯云端, 只做 ASR 识别: 不翻译、不调 LLM、不烧录)
+#   分片按「番号」归组 → ffmpeg 拼整片 → faster-whisper / kotoba-whisper 日文转写
 #   → 按标点重切成字幕行(单条 <=8s / <=42字) → 每个视频文件旁写同名 .srt 上传
 #
 # 公开仓库: 日志全部脱敏(logmask), 真实盘名/目录名/番号/链接均不出现明文。
 # Secrets: RCLONE_CONF / PATHS_JSON / GH_TOKEN / YDY_DAV_TOKEN / TG_TOKEN / TG_CHAT_ID
-# (不翻译: 不调用任何 LLM 网关, 不需要 SUBTITLE_API_* / TRANSLATE_*)
+# 2026-11-21 取消 LLM 大模型: 翻译(TRANSLATE)与转写后 LLM 校对(ASR_FIX)固定 off,
+#   不再注入 SUBTITLE_API_* / SUBTITLE_MODEL* / ASR_FIX_MODEL, 网关一次都不会被调用。
 
 on:
   schedule:
@@ -74,17 +75,13 @@ env:
   # 手动 dispatch 可临时覆盖源(留空则走 PATHS_JSON 的 SUB_SRC/SUB_DIR)
   SUB_SRC: ${{ inputs.src_remote || '' }}
   SUB_DIR: ${{ inputs.src_dir || '' }}
-  # 中译开关: 仓库 Variables 里 TRANSLATE_ZH=true 即中译(默认关, 只出日文 srt)
-  TRANSLATE: ${{ vars.TRANSLATE_ZH || 'false' }}
-  SUBTITLE_API_BASE: ${{ secrets.SUBTITLE_API_BASE }}
-  SUBTITLE_API_KEY: ${{ secrets.SUBTITLE_API_KEY }}
-  SUBTITLE_MODEL: ${{ vars.SUBTITLE_MODEL || 'deepseek-v4-flash' }}
-  SUBTITLE_MODEL_FB: ${{ vars.SUBTITLE_MODEL_FB || 'gemma-4-31b-it' }}
-  # --- ASR 质量(2026-11-20 升级: 日语专用模型 + 束搜索 + 转写后 LLM 校对) ---
+  # --- 纯日文识别模式(2026-11-21 定版): 不翻译、不调用任何 LLM 大模型 ---
+  # TRANSLATE / ASR_FIX 硬编码 off; 想恢复中译或 LLM 校对, 需要改本文件并重新配 SUBTITLE_API_*。
+  TRANSLATE: "off"
+  ASR_FIX: "off"
+  # --- ASR 质量: 日语专用模型 + 束搜索(纯本地推理, 与 LLM 无关) ---
   ASR_MODEL: ${{ vars.ASR_MODEL || 'kotoba-whisper-v2.0-faster' }}
   ASR_FALLBACK: ${{ vars.ASR_FALLBACK || 'large-v3' }}
-  ASR_FIX: ${{ vars.ASR_FIX || 'on' }}
-  ASR_FIX_MODEL: ${{ vars.ASR_FIX_MODEL || 'deepseek-v4-flash' }}
   MAX_SEG_DUR: ${{ vars.MAX_SEG_DUR || '8' }}      # 单条字幕最长秒数
   MAX_SEG_CHARS: ${{ vars.MAX_SEG_CHARS || '42' }} # 单条字幕最长字数
   WHISPER_THREADS: ${{ vars.WHISPER_THREADS || '4' }}
